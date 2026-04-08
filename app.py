@@ -183,10 +183,7 @@ with tab_check:
         with st.spinner("Analizando tu web..."):
             uptime_result = check_uptime(url)
             ssl_result    = check_ssl(url)
-            # DEBUG TEMPORAL - borrar después
-            st.write("DEBUG uptime:", uptime_result)
-            st.write("DEBUG ssl:", ssl_result)
-
+            
         st.session_state.check_count += 1
         st.session_state.last_check_time = time.time()
 
