@@ -73,10 +73,6 @@ def validate_url(url: str) -> tuple[bool, str]:
 
 # ── Check de disponibilidad (uptime) ─────────────────────────────────────────
 def check_uptime(url: str) -> dict:
-    """
-    Hace una petición HEAD (o GET si falla) con timeout estricto.
-    No sigue redirecciones infinitas (max 5).
-    """
     result = {
         "url": url,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -86,19 +82,24 @@ def check_uptime(url: str) -> dict:
         "error": None,
     }
 
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-ES,es;q=0.9",
+    }
+
     try:
         start = time.perf_counter()
-        resp = requests.head(
+        # Intentar primero GET (más compatible que HEAD)
+        resp = requests.get(
             url,
             timeout=REQUEST_TIMEOUT,
             allow_redirects=True,
-            headers={
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xhtml;q=0.9,*/*;q=0.8",
-},
-            verify=True,          # siempre verificar SSL
-            stream=False,
+            headers=headers,
+            verify=True,
+            stream=True,    # no descarga el body entero, solo headers
         )
+        resp.close()
         elapsed = (time.perf_counter() - start) * 1000
 
         result["status_code"] = resp.status_code
@@ -117,14 +118,12 @@ def check_uptime(url: str) -> dict:
     except requests.exceptions.TooManyRedirects:
         result["status"] = "down"
         result["error"] = "Demasiadas redirecciones."
-    except Exception as e:
+    except Exception:
         result["status"] = "error"
-        # No exponemos el traceback completo al usuario
         result["error"] = "Error inesperado al comprobar la web."
 
     return result
-
-
+    
 # ── Check de certificado SSL ──────────────────────────────────────────────────
 def check_ssl(url: str) -> dict:
     """
