@@ -7,6 +7,7 @@ import ssl
 import socket
 import time
 import re
+import os
 import resend
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -133,10 +134,6 @@ def check_ssl(url: str) -> dict:
 
 # ── Alerta por email via Resend ──────────────────────────────────────────────
 def send_alert_email(
-    smtp_host: str,
-    smtp_port: int,
-    smtp_user: str,
-    smtp_password: str,
     recipient: str,
     subject: str,
     body_html: str,
@@ -145,7 +142,7 @@ def send_alert_email(
     if not email_re.match(recipient):
         return False, "Email de destinatario con formato incorrecto."
     try:
-        resend.api_key = smtp_password
+        resend.api_key = os.environ.get("RESEND_API_KEY", "")
         resend.Emails.send({
             "from": "WebSentinel <onboarding@resend.dev>",
             "to": [recipient],

@@ -332,43 +332,23 @@ with tab_config:
             max_chars=254,
         )
 
-        st.markdown("#### Servidor SMTP (para enviar alertas)")
-        st.markdown("""
-        <small style="color:#64748b;">
-        Puedes usar Gmail, Outlook u otro proveedor. 
-        <a href="https://support.google.com/mail/answer/7126229" target="_blank">
-        Cómo obtener la contraseña de aplicación de Gmail →</a>
-        </small>
-        """, unsafe_allow_html=True)
-
-        col1, col2 = st.columns(2)
-        with col1:
-            smtp_host = st.text_input("Servidor SMTP", value="smtp.gmail.com", max_chars=100)
-            smtp_user = st.text_input("Usuario SMTP (tu email)", max_chars=254)
-        with col2:
-            smtp_port = st.selectbox("Puerto", [587, 465], index=0)
-            smtp_pass = st.text_input("Contraseña de aplicación", type="password", max_chars=100)
-
-        st.markdown("#### Probar configuración")
+        st.markdown("#### URL a monitorear")
         test_url = st.text_input(
-            "URL a monitorear",
+            "URL de tu web",
             placeholder="https://miweb.com",
             max_chars=300,
         )
 
-        submitted = st.form_submit_button("💾 Guardar y enviar email de prueba", type="primary")
+        submitted = st.form_submit_button(
+            "💾 Guardar y enviar email de prueba", type="primary"
+        )
 
     if submitted:
-        # Validaciones básicas
         errors = []
         import re
         email_re = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
         if not email_re.match(alert_email):
-            errors.append("El email de contacto no es válido.")
-        if not smtp_host or len(smtp_host) > 100:
-            errors.append("El servidor SMTP no es válido.")
-        if not smtp_user or not smtp_pass:
-            errors.append("Introduce usuario y contraseña SMTP.")
+            errors.append("El email no es válido.")
 
         if test_url:
             is_valid, url_or_error = validate_url(test_url)
@@ -379,16 +359,10 @@ with tab_config:
             for e in errors:
                 st.error(e)
         else:
-            # Guardar config en session_state (no en disco, no en logs)
             st.session_state.alert_config = {
                 "email": alert_email,
-                "smtp_host": smtp_host,
-                "smtp_port": smtp_port,
-                "smtp_user": smtp_user,
-                "smtp_pass": smtp_pass,
             }
 
-            # Enviar email de prueba
             html_body = build_alert_email_html(
                 url=test_url or "—",
                 issue="Email de prueba",
@@ -396,10 +370,6 @@ with tab_config:
             )
             with st.spinner("Enviando email de prueba..."):
                 ok, msg = send_alert_email(
-                    smtp_host=smtp_host,
-                    smtp_port=smtp_port,
-                    smtp_user=smtp_user,
-                    smtp_password=smtp_pass,
                     recipient=alert_email,
                     subject="🛡️ WebSentinel — Prueba de alerta",
                     body_html=html_body,
@@ -407,9 +377,7 @@ with tab_config:
             if ok:
                 st.success(f"✅ Configuración guardada. {msg}")
             else:
-                st.error(f"❌ {msg} — Revisa los datos SMTP.")
-
-
+                st.error(f"❌ {msg}")
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 4 — PLANES
 # ════════════════════════════════════════════════════════════════════════════
