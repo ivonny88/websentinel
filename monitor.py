@@ -1,7 +1,5 @@
 """
 WebSentinel - Motor de monitoreo
-Seguridad: sin eval, sin exec, validación estricta de URLs,
-timeouts en todas las peticiones, sin logging de datos sensibles.
 """
 
 import requests
@@ -9,55 +7,36 @@ import ssl
 import socket
 import time
 import re
+import resend
 from datetime import datetime, timezone
 from urllib.parse import urlparse
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
 
 # ── Constantes de seguridad ──────────────────────────────────────────────────
-REQUEST_TIMEOUT = 10          # segundos máx por petición
-MAX_URL_LENGTH  = 253         # límite DNS
+REQUEST_TIMEOUT = 10
+MAX_URL_LENGTH  = 253
 ALLOWED_SCHEMES = {"http", "https"}
 PRIVATE_IP_RANGES = re.compile(
     r"^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)"
 )
 
-
 # ── Validación de URL ────────────────────────────────────────────────────────
 def validate_url(url: str) -> tuple[bool, str]:
-    """
-    Valida la URL antes de hacer cualquier petición.
-    Previene SSRF (Server-Side Request Forgery) bloqueando IPs privadas.
-    Retorna (es_valida, mensaje).
-    """
     url = url.strip()
-
     if len(url) > MAX_URL_LENGTH * 3:
         return False, "URL demasiado larga."
-
-    # Añadir esquema si falta
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-
     try:
         parsed = urlparse(url)
     except Exception:
         return False, "URL con formato incorrecto."
-
     if parsed.scheme not in ALLOWED_SCHEMES:
-        return False, f"Esquema no permitido: {parsed.scheme}. Usa http o https."
-
+        return False, f"Esquema no permitido: {parsed.scheme}."
     host = parsed.hostname or ""
     if not host:
         return False, "No se pudo extraer el dominio."
-
-    # Bloquear IPs privadas / localhost (anti-SSRF)
     if PRIVATE_IP_RANGES.match(host):
         return False, "No se permiten IPs privadas ni localhost."
-
-    # Bloquear IPs en formato numérico directo
     try:
         parts = host.split(".")
         if len(parts) == 4 and all(p.isdigit() for p in parts):
@@ -67,11 +46,10 @@ def validate_url(url: str) -> tuple[bool, str]:
                 return False, "No se permiten IPs privadas."
     except Exception:
         pass
-
     return True, url
 
 
-# ── Check de disponibilidad (uptime) ─────────────────────────────────────────
+# ── Check de disponibilidad ──────────────────────────────────────────────────
 def check_uptime(url: str) -> dict:
     result = {
         "url": url,
@@ -81,31 +59,22 @@ def check_uptime(url: str) -> dict:
         "response_time_ms": None,
         "error": None,
     }
-
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "es-ES,es;q=0.9",
     }
-
     try:
         start = time.perf_counter()
-        # Intentar primero GET (más compatible que HEAD)
         resp = requests.get(
-            url,
-            timeout=REQUEST_TIMEOUT,
-            allow_redirects=True,
-            headers=headers,
-            verify=True,
-            stream=True,    # no descarga el body entero, solo headers
+            url, timeout=REQUEST_TIMEOUT, allow_redirects=True,
+            headers=headers, verify=True, stream=True,
         )
         resp.close()
         elapsed = (time.perf_counter() - start) * 1000
-
         result["status_code"] = resp.status_code
         result["response_time_ms"] = round(elapsed, 2)
         result["status"] = "up" if resp.status_code < 400 else "down"
-
     except requests.exceptions.SSLError:
         result["status"] = "ssl_error"
         result["error"] = "Error SSL: certificado inválido o caducado."
@@ -121,15 +90,11 @@ def check_uptime(url: str) -> dict:
     except Exception:
         result["status"] = "error"
         result["error"] = "Error inesperado al comprobar la web."
-
     return result
-    
-# ── Check de certificado SSL ──────────────────────────────────────────────────
+
+
+# ── Check de certificado SSL ─────────────────────────────────────────────────
 def check_ssl(url: str) -> dict:
-    """
-    Comprueba la caducidad del certificado SSL.
-    Usa ssl.create_default_context() para no deshabilitar verificaciones.
-    """
     result = {
         "url": url,
         "has_ssl": False,
@@ -137,44 +102,36 @@ def check_ssl(url: str) -> dict:
         "expiry_date": None,
         "error": None,
     }
-
     parsed = urlparse(url)
     if parsed.scheme != "https":
         result["error"] = "La web no usa HTTPS."
         return result
-
     host = parsed.hostname
     port = parsed.port or 443
-
     try:
         ctx = ssl.create_default_context()
         with socket.create_connection((host, port), timeout=REQUEST_TIMEOUT) as sock:
             with ctx.wrap_socket(sock, server_hostname=host) as ssock:
                 cert = ssock.getpeercert()
-
-        # Parsear fecha de expiración
         expiry_str = cert.get("notAfter", "")
         expiry_dt = datetime.strptime(expiry_str, "%b %d %H:%M:%S %Y %Z").replace(
             tzinfo=timezone.utc
         )
         now = datetime.now(timezone.utc)
         days_remaining = (expiry_dt - now).days
-
         result["has_ssl"] = True
         result["days_remaining"] = days_remaining
         result["expiry_date"] = expiry_dt.strftime("%d/%m/%Y")
-
     except ssl.SSLCertVerificationError:
         result["error"] = "Certificado SSL inválido o no confiable."
     except socket.timeout:
         result["error"] = "Timeout al comprobar SSL."
     except Exception:
         result["error"] = "No se pudo comprobar el certificado SSL."
-
     return result
 
 
-# ── Alerta por email ──────────────────────────────────────────────────────────
+# ── Alerta por email via Resend ──────────────────────────────────────────────
 def send_alert_email(
     smtp_host: str,
     smtp_port: int,
@@ -184,46 +141,23 @@ def send_alert_email(
     subject: str,
     body_html: str,
 ) -> tuple[bool, str]:
-    """
-    Envía alerta por email usando TLS (STARTTLS o SSL).
-    - Nunca loguea smtp_password.
-    - Valida el email del destinatario antes de enviar.
-    """
-    # Validación básica del email destinatario
     email_re = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
     if not email_re.match(recipient):
         return False, "Email de destinatario con formato incorrecto."
-
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = smtp_user
-        msg["To"]      = recipient
-        msg.attach(MIMEText(body_html, "html", "utf-8"))
-
-        if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as server:
-                server.login(smtp_user, smtp_password)
-                server.sendmail(smtp_user, [recipient], msg.as_string())
-        else:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(smtp_user, smtp_password)
-                server.sendmail(smtp_user, [recipient], msg.as_string())
-
+        resend.api_key = smtp_password
+        resend.Emails.send({
+            "from": "WebSentinel <onboarding@resend.dev>",
+            "to": [recipient],
+            "subject": subject,
+            "html": body_html,
+        })
         return True, "Email enviado correctamente."
-
-    except smtplib.SMTPAuthenticationError:
-        return False, "Credenciales SMTP incorrectas."
-    except smtplib.SMTPException as e:
-        return False, "Error al enviar el email."
     except Exception:
         return False, "Error inesperado al enviar el email."
 
 
-# ── Generar cuerpo del email de alerta ───────────────────────────────────────
+# ── Generar cuerpo del email ─────────────────────────────────────────────────
 def build_alert_email_html(url: str, issue: str, detail: str) -> str:
     return f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;
@@ -238,8 +172,7 @@ def build_alert_email_html(url: str, issue: str, detail: str) -> str:
         <p><strong>Problema:</strong> {issue}</p>
         <p><strong>Detalle:</strong> {detail}</p>
         <p style="color:#6b7280;font-size:12px;margin-top:32px;">
-          Este email fue enviado por WebSentinel. 
-          Si no esperabas este mensaje, ignóralo.
+          Este email fue enviado por WebSentinel.
         </p>
       </div>
     </div>
